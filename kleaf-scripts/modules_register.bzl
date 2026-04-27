@@ -12,7 +12,8 @@ load(
     "define_defconfig_fragment",
     "fragment_menuconfig",
 )
-
+load("//build/kernel/oplus:oplus_modules.bzl", "get_oplus_ddk_modules_list")
+load("//build/kernel/oplus:oplus_modules_define.bzl", "oplus_ddk_get_target", "oplus_ddk_get_variant")
 def signing_genrule(name, module, base_kernel, target_variant):
     native.genrule(
         name = name,
@@ -68,9 +69,12 @@ def _generate_ddk_target(
     ddk_config(
         name = "{}_config".format(target_variant),
         defconfig = ":{}_defconfig".format(target_variant),
-        kconfigs = [":kconfig.msm.generated"],
+        kconfigs = [
+            ":kconfig.msm.generated",
+            "//vendor/oplus/kernel/charger/bazel:kconfig.oplus_chg.generated"],
         kernel_build = ":{}_base_kernel".format(target_variant),
         deps = ddk_config_deps,
+        visibility = ["//visibility:public"],
     )
 
     if config_path:
@@ -106,6 +110,12 @@ def _generate_ddk_target(
 
     for module in matched_configurations:
         deps = [":{}".format(module_names.get(dep)) for dep in module.deps if module_names.get(dep)]
+
+        # add oplus module deps
+        for dep in module.deps:
+            if dep.startswith("//vendor/oplus"):
+                deps.append(dep.replace("{target_variant}", "{}".format(target_variant)))
+
         src_hdrs = [src for src in module.srcs if src.endswith(".h")]
         includes = (module.includes or []) + {paths.dirname(hdr): "" for hdr in src_hdrs}.keys()
 
@@ -134,7 +144,7 @@ def _generate_ddk_target(
         )
     kernel_module_group(
         name = "{}_all_modules".format(target_variant),
-        srcs = module_names.values(),
+        srcs = module_names.values() + get_oplus_ddk_modules_list(oplus_ddk_get_target(),oplus_ddk_get_variant()),
         visibility = ["//visibility:public"],
     )
 

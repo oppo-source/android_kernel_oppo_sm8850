@@ -24,6 +24,11 @@ def register_modules(registry):
             "drivers/virt/gunyah/gh_msgq",
             "drivers/virt/gunyah/gh_dbl",
             "arch/arm64/gunyah/gh_arm_drv",
+            "//vendor/oplus/kernel/device_info/device_info/bazel:device_info",
+            "//vendor/oplus/kernel/boot:oplus_bsp_bootmode",
+        ],
+        local_defines = [
+            "OPLUS_FEATURE_CHG_BASIC"
         ],
     )
 

@@ -91,4 +91,14 @@ config USB_CONFIGFS_F_GSI
 	  related functionalities using GSI hardware accelerated data
 	  path and control path.
 
+config USB_F_RNDIS
+	tristate "USB RNDIS function"
+	depends on USB_CONFIGFS
+	help
+	  USB RNDIS function driver to support Remote NDIS protocol over USB.
+	  USB RNDIS function driver which enables the device to act as a
+	  network adapter over USB, allowing communication between host PC
+	  (mainly Windows systems) and the device for network data transfer
+	  via Remote NDIS specification.
+
 endif # USB_GADGET

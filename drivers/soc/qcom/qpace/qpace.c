@@ -202,7 +202,6 @@ static inline u32 qpace_urgent_command_trigger(phys_addr_t input_addr,
 	: : "r" (urg_addr_field_lower), "r" (urg_addr_field_upper), "r" (td_dst_src_reg)
 	: "memory");
 
-
 	stat_reg = QPACE_READ_URG_CMD_REG(urg_reg_num,
 					  QPACE_URG_CMD_0_ED_STAT_OFFSET);
 

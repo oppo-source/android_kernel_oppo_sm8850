@@ -24,6 +24,34 @@ struct votable;
 
 extern const char *task_event_names[];
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_FRAME_BOOST)
+TRACE_EVENT(ed_task_boost,
+
+	    TP_PROTO(unsigned long cpu_util, unsigned long util, unsigned int ed_task_boost_type,
+			unsigned int ed_task_boost_mid_util, unsigned int ed_task_boost_max_util),
+
+	    TP_ARGS(cpu_util, util, ed_task_boost_type, ed_task_boost_mid_util, ed_task_boost_max_util),
+
+	    TP_STRUCT__entry(
+			__field(unsigned long, cpu_util)
+			__field(unsigned long, util)
+			__field(unsigned int, ed_task_boost_type)
+			__field(unsigned int, ed_task_boost_mid_util)
+			__field(unsigned int, ed_task_boost_max_util)),
+
+	    TP_fast_assign(
+			__entry->cpu_util = cpu_util;
+			__entry->util = util;
+			__entry->ed_task_boost_type = ed_task_boost_type;
+			__entry->ed_task_boost_mid_util = ed_task_boost_mid_util;
+			__entry->ed_task_boost_max_util = ed_task_boost_max_util;),
+
+	    TP_printk("cpu_util = %lu, util = %lu, ed_task_boost_type = %d, mid_util = %d, max_util = %d",
+			__entry->cpu_util, __entry->util, __entry->ed_task_boost_type,
+			__entry->ed_task_boost_mid_util, __entry->ed_task_boost_max_util)
+);
+#endif
+
 TRACE_EVENT(sched_update_pred_demand,
 
 	TP_PROTO(struct task_struct *p, u32 runtime,
@@ -1367,7 +1395,6 @@ TRACE_EVENT(sched_enq_deq_task,
 
 	TP_PROTO(struct task_struct *p, bool enqueue, unsigned int cpus_allowed, bool mvp,
 		pid_t big_task_pid),
-
 	TP_ARGS(p, enqueue, cpus_allowed, mvp, big_task_pid),
 
 	TP_STRUCT__entry(

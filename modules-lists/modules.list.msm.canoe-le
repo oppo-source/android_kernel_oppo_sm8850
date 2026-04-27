@@ -113,3 +113,4 @@ arm_smmu_pmu.ko
 deferred-free-helper.ko
 i2c-msm-geni.ko
 msm_gpi.ko
+f_rndis.ko

@@ -20,7 +20,9 @@
 
 #include "walt.h"
 #include "trace.h"
-
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
+#include <sched_assist/sa_pipeline.h>
+#endif
 /* mask of all CPUs with a fully pause claim outstanding */
 cpumask_t cpus_paused_by_us = { CPU_BITS_NONE };
 
@@ -1099,8 +1101,17 @@ static unsigned int apply_task_need(const struct cluster_data *cluster)
 static unsigned int apply_limits(const struct cluster_data *cluster,
 				 unsigned int need_cpus)
 {
+#if (!IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_EXT))
 	if (!cluster->enable)
+#else
+	if (!cluster->enable || scx_enabled())
 		return cluster->num_cpus;
+#endif
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
+	if (cluster->boost && oplus_is_pipeline_scene())
+		return cluster->num_cpus;
+#endif
 
 	return min(max(cluster->min_cpus, need_cpus), cluster->max_cpus);
 }
@@ -1818,9 +1829,32 @@ static void __ref do_core_ctl(void)
 	core_ctl_resume_cpus(&cpus_to_unpause, &cpus_to_part_unpause);
 }
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_EXT)
+bool should_core_ctl(void)
+{
+	struct cluster_data *cluster;
+	unsigned int index = 0;
+
+	if (scx_enabled()){
+		for_each_cluster(cluster, index)
+			if (cluster->active_cpus != cluster->num_cpus)
+				return true;
+
+		return false;
+	}
+
+	return true;
+}
+#endif
+
 static int __ref try_core_ctl(void *data)
 {
 	unsigned long flags;
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_SCHED_EXT)
+	if (!should_core_ctl())
+		return 0;
+#endif
 
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
@@ -1955,7 +1989,9 @@ int core_ctl_init(void)
 		if (ret)
 			pr_warn("unable to create core ctl group: %d\n", ret);
 	}
-
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
+	oplus_core_ctl_set_cluster_boost = core_ctl_set_cluster_boost;
+#endif
 	initialized = true;
 
 	return 0;

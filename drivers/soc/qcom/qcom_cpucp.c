@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2020-2021, The Linux Foundation. All rights reserved.
- * Copyright (c) 2022-2025 Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/module.h>
@@ -52,6 +52,9 @@ struct qcom_cpucp_mbox_desc {
 	u32 num_chans;
 };
 
+/* Global lock for some shared RX regs on v2 mbox */
+static DEFINE_SPINLOCK(cpucp_v2_rx_lock);
+
 static irqreturn_t qcom_cpucp_rx_interrupt(int irq, void *p)
 {
 	struct qcom_cpucp_ipc *cpucp_ipc = p;
@@ -86,6 +89,7 @@ static irqreturn_t qcom_cpucp_v2_mbox_rx_interrupt(int irq, void *p)
 	int i;
 	unsigned long flags;
 
+/* cpucp_v2_rx_lock not used as it is assumed shared RX use same irq */
 	status = readq(cpucp_ipc->rx_irq_base + desc->status_reg);
 
 	for (i = 0; i < desc->num_chans; i++) {
@@ -113,12 +117,15 @@ static int qcom_cpucp_mbox_startup(struct mbox_chan *chan)
 	struct qcom_cpucp_ipc *cpucp_ipc = container_of(chan->mbox, struct qcom_cpucp_ipc, mbox);
 	unsigned long chan_id = (unsigned long)chan->con_priv;
 	const struct qcom_cpucp_mbox_desc *desc = cpucp_ipc->desc;
+	unsigned long flags;
 	u64 val;
 
 	if (desc->v2_mbox) {
+		spin_lock_irqsave(&cpucp_v2_rx_lock, flags);
 		val = readq(cpucp_ipc->rx_irq_base + desc->enable_reg);
 		val |= ((u64)1 << chan_id);
 		writeq(val, cpucp_ipc->rx_irq_base + desc->enable_reg);
+		spin_unlock_irqrestore(&cpucp_v2_rx_lock, flags);
 	}
 
 	return 0;
@@ -133,9 +140,11 @@ static void qcom_cpucp_mbox_shutdown(struct mbox_chan *chan)
 	u64 val;
 
 	if (desc->v2_mbox) {
+		spin_lock_irqsave(&cpucp_v2_rx_lock, flags);
 		val = readq(cpucp_ipc->rx_irq_base + desc->enable_reg);
 		val &= ~((u64)1 << chan_id);
 		writeq(val, cpucp_ipc->rx_irq_base + desc->enable_reg);
+		spin_unlock_irqrestore(&cpucp_v2_rx_lock, flags);
 	}
 
 	spin_lock_irqsave(&cpucp_ipc->chans_locks[chan_id], flags);
@@ -265,12 +274,6 @@ static int qcom_cpucp_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	for (i = 0; i < desc->num_chans; i++)
 		spin_lock_init(&cpucp_ipc->chans_locks[i]);
-
-	if (desc->v2_mbox) {
-		writeq(0, cpucp_ipc->rx_irq_base + desc->enable_reg);
-		writeq(0, cpucp_ipc->rx_irq_base + desc->clear_reg);
-		writeq(0, cpucp_ipc->rx_irq_base + desc->map_reg);
-	}
 
 	cpucp_ipc->irq = platform_get_irq(pdev, 0);
 	if (cpucp_ipc->irq < 0) {

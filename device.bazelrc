@@ -9,5 +9,9 @@ build --//build/kernel/kleaf:socrepo=true
 build --flag_alias=qtisocrepo=//build/qcom_build_extensions:qtisocrepo
 build --//build/qcom_build_extensions:qtisocrepo=true
 common --//build/kernel/kleaf:user_ddk_unsafe_headers=//soc-repo:unsafe_headers_qcom_group
+
+#martin.li set oplus_platform_name default qcom
+build --//build/kernel/kleaf:oplus_platform_name=qcom
 # Allocate default 80% heap for bazel
 startup --host_jvm_args=-XX:MaxRAMPercentage=80.0
+

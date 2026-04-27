@@ -33,14 +33,28 @@
 #include <linux/debugfs.h>
 #include <linux/cpuhotplug.h>
 #include <linux/part_stat.h>
-
+#include <linux/fs.h>
 #include <linux/memory.h>
 #include <linux/kthread.h>
 #include <linux/delay.h>
 #include <linux/list.h>
 
+#ifdef CONFIG_KCOMPRESSD
+#include "kcompressd.h"
+#endif
 #include "zram_drv.h"
 #include "../../soc/qcom/qpace/qpace.h"
+#ifdef CONFIG_HYBRIDSWAP
+#include "hybridswap_zram_drv.h"
+#include "hybridswap/hybridswap.h"
+#include "hybridswap/internal.h"
+#endif
+#ifdef CONFIG_OPLUS_QPACE_RUS
+#include "mm_osvelte/mm-config.h"
+#endif
+
+/* force disable ZRAM_WRITEBACK, otherwise GKI defconfig will impact */
+#undef CONFIG_ZRAM_WRITEBACK
 
 static DEFINE_IDR(zram_index_idr);
 /* idr index must be protected */
@@ -68,6 +82,23 @@ static int zram_slot_trylock(struct zram *zram, u32 index)
 	return spin_trylock(&zram->table[index].lock);
 }
 
+static inline bool init_done(struct zram *zram)
+{
+        return zram->disksize;
+}
+
+static inline void zram_set_element(struct zram *zram, u32 index,
+                        unsigned long element)
+{
+        zram->table[index].element = element;
+}
+
+static unsigned long zram_get_element(struct zram *zram, u32 index)
+{
+        return zram->table[index].element;
+}
+
+#ifndef CONFIG_HYBRIDSWAP
 static void zram_slot_lock(struct zram *zram, u32 index)
 {
 	spin_lock(&zram->table[index].lock);
@@ -76,11 +107,6 @@ static void zram_slot_lock(struct zram *zram, u32 index)
 static void zram_slot_unlock(struct zram *zram, u32 index)
 {
 	spin_unlock(&zram->table[index].lock);
-}
-
-static inline bool init_done(struct zram *zram)
-{
-	return zram->disksize;
 }
 
 static inline struct zram *dev_to_zram(struct device *dev)
@@ -117,17 +143,6 @@ static void zram_clear_flag(struct zram *zram, u32 index,
 	zram->table[index].flags &= ~BIT(flag);
 }
 
-static inline void zram_set_element(struct zram *zram, u32 index,
-			unsigned long element)
-{
-	zram->table[index].element = element;
-}
-
-static unsigned long zram_get_element(struct zram *zram, u32 index)
-{
-	return zram->table[index].element;
-}
-
 static size_t zram_get_obj_size(struct zram *zram, u32 index)
 {
 	return zram->table[index].flags & (BIT(ZRAM_FLAG_SHIFT) - 1);
@@ -140,6 +155,7 @@ static void zram_set_obj_size(struct zram *zram,
 
 	zram->table[index].flags = (flags << ZRAM_FLAG_SHIFT) | size;
 }
+#endif /* CONFIG_HYBRIDSWAP */
 
 static inline bool zram_allocated(struct zram *zram, u32 index)
 {
@@ -500,7 +516,7 @@ static ssize_t backing_dev_store(struct device *dev,
 	if (sz > 0 && file_name[sz - 1] == '\n')
 		file_name[sz - 1] = 0x00;
 
-	backing_dev = filp_open(file_name, O_RDWR | O_LARGEFILE | O_EXCL, 0);
+	backing_dev = filp_open_block(file_name, O_RDWR | O_LARGEFILE | O_EXCL, 0);
 	if (IS_ERR(backing_dev)) {
 		err = PTR_ERR(backing_dev);
 		backing_dev = NULL;
@@ -1262,6 +1278,9 @@ static void zram_free_page(struct zram *zram, size_t index)
 		zram_clear_flag(zram, index, ZRAM_INCOMPRESSIBLE);
 
 	zram_set_priority(zram, index, 0);
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	hybridswap_untrack(zram, index);
+#endif
 
 	if (zram_test_flag(zram, index, ZRAM_WB)) {
 		zram_clear_flag(zram, index, ZRAM_WB);
@@ -1382,8 +1401,20 @@ static int zram_read_page(struct zram *zram, struct page *page, u32 index,
 	}
 
 	/* Should NEVER happen. Return bio error if it does. */
-	if (WARN_ON(ret < 0))
-		panic("Decompression failed! err=%d, page=%u\n", ret, index);
+	if (WARN_ON(ret < 0)) {
+		if (is_qpace_dev_available()) {
+#ifdef CONFIG_OPLUS_QPACE_RUS
+			if (oplus_test_mm_feature_disable(COMFD1_QPACE))
+				pr_err("Decompression failed! err=%d, page=%u\n", ret, index);
+			else
+				panic("Decompression failed! err=%d, page=%u\n", ret, index);
+#else
+			panic("Decompression failed! err=%d, page=%u\n", ret, index);
+#endif
+		} else {
+			pr_err("Decompression failed! err=%d, page=%u\n", ret, index);
+		}
+	}
 
 	return ret;
 }
@@ -1534,6 +1565,10 @@ out:
 		zram_set_handle(zram, index, handle);
 		zram_set_obj_size(zram, index, comp_len);
 	}
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	/* zram write page by default */
+	hybridswap_track(zram, index, folio_memcg(page_folio(page)));
+#endif
 	zram_slot_unlock(zram, index);
 
 	/* Update stats */
@@ -1675,6 +1710,10 @@ static int zram_write_finish(struct qpace_request_data *zdata,
 	}  else {
 		zram_set_handle(zram, index, handle);
 		zram_set_obj_size(zram, index, comp_len);
+#ifdef CONFIG_HYBRIDSWAP_CORE
+		/* zram write page by hardware, no need to track same page */
+		hybridswap_track(zmeta->zram, zdata->bdev_page_index, folio_memcg(page_folio(zdata->page)));
+#endif
 	}
 
 	zram_accessed(zram, index);
@@ -2518,6 +2557,15 @@ static void zram_bio_write(struct zram *zram, struct bio *bio)
 	bio_endio(bio);
 }
 
+#ifdef CONFIG_KCOMPRESSD
+static void zram_bio_write_callback(void *mem, struct bio *bio)
+{
+	struct zram *zram = (struct zram *)mem;
+
+	zram_bio_write(zram, bio);
+}
+#endif
+
 /*
  * Handler function for all zram I/O requests.
  */
@@ -2532,8 +2580,13 @@ static void zram_submit_bio(struct bio *bio)
 	case REQ_OP_WRITE:
 		if (zram->qpace)
 			qpace_zram_submit_bio(zram, bio, &comp_control);
-		else
+		else {
+#ifdef CONFIG_KCOMPRESSD
+		if (!schedule_bio_write(zram, bio, zram_bio_write_callback))
+			break;
+#endif
 			zram_bio_write(zram, bio);
+		}
 		break;
 	case REQ_OP_DISCARD:
 	case REQ_OP_WRITE_ZEROES:
@@ -2558,6 +2611,13 @@ static void zram_slot_free_notify(struct block_device *bdev,
 		return;
 	}
 
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	if (!hybridswap_delete(zram, index)) {
+		zram_slot_unlock(zram, index);
+		atomic64_inc(&zram->stats.miss_free);
+		return;
+	}
+#endif
 	zram_free_page(zram, index);
 	zram_slot_unlock(zram, index);
 }
@@ -2597,7 +2657,9 @@ static void zram_reset_device(struct zram *zram)
 	zram_destroy_comps(zram);
 	memset(&zram->stats, 0, sizeof(zram->stats));
 	reset_bdev(zram);
-
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	hybridswap_unbind(zram);
+#endif
 	comp_algorithm_set(zram, ZRAM_PRIMARY_COMP, default_compressor);
 	up_write(&zram->init_lock);
 }
@@ -2731,6 +2793,24 @@ static DEVICE_ATTR_WO(writeback);
 static DEVICE_ATTR_RW(writeback_limit);
 static DEVICE_ATTR_RW(writeback_limit_enable);
 #endif
+#ifdef CONFIG_HYBRIDSWAP
+static DEVICE_ATTR_RO(hybridswap_vmstat);
+static DEVICE_ATTR_RW(hybridswap_loglevel);
+static DEVICE_ATTR_RW(hybridswap_enable);
+#endif
+#ifdef CONFIG_HYBRIDSWAP_SWAPD
+static DEVICE_ATTR_RW(hybridswap_swapd_pause);
+#endif
+#ifdef CONFIG_HYBRIDSWAP_CORE
+static DEVICE_ATTR_RW(hybridswap_core_enable);
+static DEVICE_ATTR_RW(hybridswap_loop_device);
+static DEVICE_ATTR_RW(hybridswap_dev_life);
+static DEVICE_ATTR_RW(hybridswap_quota_day);
+static DEVICE_ATTR_RO(hybridswap_report);
+static DEVICE_ATTR_RO(hybridswap_stat_snap);
+static DEVICE_ATTR_RO(hybridswap_meminfo);
+static DEVICE_ATTR_RW(hybridswap_zram_increase);
+#endif
 #ifdef CONFIG_ZRAM_MULTI_COMP
 static DEVICE_ATTR_RW(recomp_algorithm);
 static DEVICE_ATTR_WO(recompress);
@@ -2761,6 +2841,24 @@ static struct attribute *zram_disk_attrs[] = {
 #ifdef CONFIG_ZRAM_MULTI_COMP
 	&dev_attr_recomp_algorithm.attr,
 	&dev_attr_recompress.attr,
+#endif
+#ifdef CONFIG_HYBRIDSWAP
+	&dev_attr_hybridswap_vmstat.attr,
+	&dev_attr_hybridswap_loglevel.attr,
+	&dev_attr_hybridswap_enable.attr,
+#endif
+#ifdef CONFIG_HYBRIDSWAP_SWAPD
+	&dev_attr_hybridswap_swapd_pause.attr,
+#endif
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	&dev_attr_hybridswap_core_enable.attr,
+	&dev_attr_hybridswap_report.attr,
+	&dev_attr_hybridswap_meminfo.attr,
+	&dev_attr_hybridswap_stat_snap.attr,
+	&dev_attr_hybridswap_loop_device.attr,
+	&dev_attr_hybridswap_dev_life.attr,
+	&dev_attr_hybridswap_quota_day.attr,
+	&dev_attr_hybridswap_zram_increase.attr,
 #endif
 	NULL,
 };
@@ -2800,7 +2898,7 @@ static int zram_add(void)
 	struct zram *zram;
 	int ret, device_id;
 
-	static bool use_qpace = true;
+	static bool use_qpace = false;
 
 	zram = kzalloc(sizeof(struct zram), GFP_KERNEL);
 	if (!zram)
@@ -2815,6 +2913,11 @@ static int zram_add(void)
 #else
 	if (!is_qpace_dev_available())
 		use_qpace = false;
+#endif
+#ifdef CONFIG_OPLUS_QPACE_RUS
+	if (oplus_test_mm_feature_disable(COMFD1_QPACE))
+		use_qpace = false;
+	pr_info("qpace: %s\n", use_qpace ? "enable" : "disable");
 #endif
 	if (use_qpace) {
 		zram->qpace = true;
@@ -3063,6 +3166,10 @@ static int __init zram_init(void)
 		return -EBUSY;
 	}
 
+#ifdef CONFIG_KCOMPRESSD
+	kcompressd_init();
+#endif
+
 	while (num_devices != 0) {
 		mutex_lock(&zram_index_mutex);
 		ret = zram_add();
@@ -3080,8 +3187,16 @@ static int __init zram_init(void)
 	if (!comp_thread)
 		goto delete_comp_queue;
 
+#ifdef CONFIG_HYBRIDSWAP
+	ret = hybridswap_pre_init();
+	if (ret)
+		goto destroy_comp_thread;
+#endif
+
 	return 0;
 
+destroy_comp_thread:
+	kthread_stop(comp_thread);
 delete_comp_queue:
 	zram_delete_compress_queue(DESCRIPTORS_PER_RING - 1);
 out_error:
@@ -3091,6 +3206,9 @@ out_error:
 
 static void __exit zram_exit(void)
 {
+#ifdef CONFIG_KCOMPRESSD
+	kcompressd_exit();
+#endif
 	destroy_devices();
 }
 
@@ -3103,3 +3221,7 @@ MODULE_PARM_DESC(num_devices, "Number of pre-created zram devices");
 MODULE_LICENSE("Dual BSD/GPL");
 MODULE_AUTHOR("Nitin Gupta <ngupta@vflare.org>");
 MODULE_DESCRIPTION("Compressed RAM Block Device");
+#ifdef CONFIG_HYBRIDSWAP
+MODULE_IMPORT_NS(MINIDUMP);
+#endif
+

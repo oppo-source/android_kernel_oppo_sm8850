@@ -1,6 +1,8 @@
 load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load("@bazel_skylib//rules:write_file.bzl", "write_file")
-load("//build:msm_kernel_extensions.bzl", "define_extras", "export_init_boot_prebuilt", "get_vendor_ramdisk_binaries")
+
+load(":kleaf-scripts/msm_kernel_extensions.bzl", "define_extras", "export_init_boot_prebuilt", "get_vendor_ramdisk_binaries")
+
 load("//build/bazel_common_rules/dist:dist.bzl", "copy_to_dist_dir")
 load("//build/kernel/kleaf:hermetic_tools.bzl", "hermetic_genrule")
 load(
@@ -20,6 +22,9 @@ load(":kleaf-scripts/modules_unprotected.bzl", "get_unprotected_vendor_modules_l
 load(":kleaf-scripts/msm_dtc.bzl", "define_dtc_dist")
 load(":kleaf-scripts/techpack_modules.bzl", "define_techpack_modules")
 load(":qcom_modules.bzl", "registry")
+load("//build/kernel/oplus:oplus_modules.bzl", "get_oplus_ddk_modules_list")
+load("//build/kernel/oplus:oplus_modules_define.bzl", "oplus_ddk_get_target", "oplus_ddk_get_variant")
+load(":configs/oplus_config.bzl", "get_oplus_perf_config", "get_oplus_consolidate_config")
 
 def define_common_android_rules():
     write_file(
@@ -65,16 +70,36 @@ def define_single_android_build(
         config_path = config_path,
     )
 
+    # Extract all .ko filenames from modules_install
+    # modules_install contains all modules (registry + OPLUS) with their actual .ko filenames
+    # kernel_images will automatically deduplicate against modules_list (modules.list.msm.canoe)
+    # So modules in modules.list.msm.canoe go to vendor_boot.modules.load,
+    # and modules NOT in modules.list.msm.canoe (like saupwk.ko) go to vendor_dlkm.modules.load
+    hermetic_genrule(
+        name = "{}_all_modules_names".format(stem),
+        srcs = [":{}_modules_install".format(stem)],
+        outs = ["all_modules_names_{}.txt".format(stem)],
+        cmd = """
+          touch "$@"
+          # Extract all .ko filenames from modules_install
+          for ko_file in $(SRCS); do
+            if echo "$$ko_file" | grep -q "\\.ko$$"; then
+              basename "$$ko_file" >> "$@"
+            fi
+          done
+        """,
+    )
+
     hermetic_genrule(
         name = "{}_vendor_dlkm_modules_list_generated".format(stem),
-        srcs = [],
+        srcs = [":{}_all_modules_names".format(stem)],
         outs = ["modules.list.vendor_dlkm.{}".format(stem)],
         cmd = """
           touch "$@"
-          for module in {mod_list}; do
-            basename "$$module".ko >> "$@"
-          done
-        """.format(mod_list = " ".join(modules)),
+          if [ -f $(SRCS) ]; then
+            cat $(SRCS) >> "$@"
+          fi
+        """,
     )
 
     if dtb_target:
@@ -237,8 +262,12 @@ def define_single_android_build(
         """,
     )
 
+    # Get OPLUS modules list - these are full Bazel target paths like "//vendor/oplus/kernel/boot:buildvariant"
+    oplus_modules = get_oplus_ddk_modules_list(oplus_ddk_get_target(), oplus_ddk_get_variant())
+
     dist_data = [
         "{}_gki_artifacts".format(base_kernel),
+        "{}".format(base_kernel),
         ":{}_modules_install".format(stem),
         "{}_dtb_build".format(stem),
         ":{}_images".format(stem),
@@ -253,7 +282,7 @@ def define_single_android_build(
     ] + [
         ":{}/{}".format(stem, module)
         for module in modules
-    ]
+    ] + oplus_modules
 
     vendor_dlkm_module_unprotected_list = get_unprotected_vendor_modules_list(stem)
     vendor_unprotected_dlkm = " ".join(vendor_dlkm_module_unprotected_list)
@@ -356,21 +385,27 @@ def define_typical_android_build(
         defconfigs = [":{}_perf_defconfig".format(name)],
     )
 
+    # Merge OPLUS configs with platform configs based on platform name
+    oplus_perf = get_oplus_perf_config(name)
+    oplus_consolidate = get_oplus_consolidate_config(name)
+    merged_perf_config = perf_config | oplus_perf
+    merged_consolidate_config = consolidate_config | oplus_consolidate
+
     define_android_build(
         name,
         configs = {
             "perf": {
-                "config_fragment": perf_config,
+                "config_fragment": merged_perf_config,
                 "base_kernel": ":msm_kernel_build",
                 "build_img_opts": perf_build_img_opts,
                 "ddk_config_deps": [common_info],
             } | perf_kwargs,
             "consolidate": {
-                "config_fragment": consolidate_config,
+                "config_fragment": merged_consolidate_config,
                 "base_kernel": "//soc-repo:kernel_aarch64_consolidate",
                 "build_img_opts": consolidate_build_img_opts,
                 "ddk_config_deps": [common_info],
-                "implicit_config_fragment": perf_config,
+                "implicit_config_fragment": merged_perf_config,
             } | consolidate_kwargs,
         },
         dtb_target = name,

@@ -33,6 +33,9 @@
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <uapi/linux/msm_geni_serial.h>
+#ifdef CONFIG_OPLUS_POGOPIN_FUNCTION
+#include <linux/pogo_common.h>
+#endif /* CONFIG_OPLUS_POGOPIN_FUNCTION */
 
 static bool con_enabled = IS_ENABLED(CONFIG_SERIAL_MSM_GENI_CONSOLE_DEFAULT_ENABLED);
 
@@ -220,6 +223,17 @@ static bool con_enabled = IS_ENABLED(CONFIG_SERIAL_MSM_GENI_CONSOLE_DEFAULT_ENAB
 #define CREATE_TRACE_POINTS
 #include "serial_trace.h"
 
+#ifdef CONFIG_OPLUS_POGOPIN_FUNCTION
+static struct pogo_keyboard_operations pogo_keyboard_ops = {
+	.name = "pogo_keyboard_ops", .init = NULL, .write = NULL, .recv = NULL,
+	.resume = NULL, .suspend = NULL, .remove = NULL, .check = NULL,
+};
+struct pogo_keyboard_operations *get_pogo_keyboard_operations(void)
+{
+	return &pogo_keyboard_ops;
+}
+EXPORT_SYMBOL_GPL(get_pogo_keyboard_operations);
+#endif /* CONFIG_OPLUS_POGOPIN_FUNCTION */
 /* FTRACE Logging */
 static void __ftrace_dbg(struct device *dev, const char *fmt, ...)
 {
@@ -2828,6 +2842,13 @@ static int msm_geni_serial_prep_dma_tx(struct uart_port *uport)
 	if (!xmit_size)
 		return -EPERM;
 
+#ifdef CONFIG_OPLUS_POGOPIN_FUNCTION
+	if(pogo_keyboard_ops.check && pogo_keyboard_ops.write) {
+		if(pogo_keyboard_ops.check(uport)) {
+			pogo_keyboard_ops.write(NULL,1);
+		}
+	}
+#endif /* CONFIG_OPLUS_POGOPIN_FUNCTION */
 	dump_ipc(uport, msm_port->ipc_log_tx, "DMA Tx", tail_ptr, 0, xmit_size);
 
 	UART_LOG_DBG(msm_port->ipc_log_misc, uport->dev,
@@ -3791,6 +3812,13 @@ static int msm_geni_serial_handle_dma_rx(struct uart_port *uport, bool drop_rx)
 		}
 	}
 
+#ifdef CONFIG_OPLUS_POGOPIN_FUNCTION
+	if(pogo_keyboard_ops.check && pogo_keyboard_ops.recv){
+		if(pogo_keyboard_ops.check(uport)) {
+			pogo_keyboard_ops.recv((unsigned char *)(msm_port->rx_buf), rx_bytes);
+		}
+	}
+#endif /* CONFIG_OPLUS_POGOPIN_FUNCTION */
 	tport = &uport->state->port;
 	ret = tty_insert_flip_string(tport, (unsigned char *)(msm_port->rx_buf), rx_bytes);
 	rx_bytes_copied = ret;
@@ -3988,6 +4016,13 @@ static bool handle_tx_dma_xfer(u32 m_irq_status, struct uart_port *uport)
 				/* Reset SOC_RFR_HIGH error code if DMA TX is success */
 				msm_geni_update_uart_error_code(msm_port, UART_ERROR_DEFAULT);
 			}
+		#ifdef CONFIG_OPLUS_POGOPIN_FUNCTION
+			if(pogo_keyboard_ops.check && pogo_keyboard_ops.write) {
+				if(pogo_keyboard_ops.check(uport)) {
+					pogo_keyboard_ops.write(NULL, 0);
+				}
+			}
+		#endif /* CONFIG_OPLUS_POGOPIN_FUNCTION */
 		}
 	}
 	if (m_irq_status & (M_CMD_CANCEL_EN | M_CMD_ABORT_EN))
@@ -4373,6 +4408,13 @@ static void msm_geni_serial_shutdown(struct uart_port *uport)
 	int ret = 0, j = 0, i, timeout;
 	unsigned long long start_time;
 
+#ifdef CONFIG_OPLUS_POGOPIN_FUNCTION
+	if(pogo_keyboard_ops.check && pogo_keyboard_ops.init){
+		if(pogo_keyboard_ops.check(uport)) {
+			pogo_keyboard_ops.init(uport,0);
+		}
+	}
+#endif /* CONFIG_OPLUS_POGOPIN_FUNCTION */
 	UART_LOG_DBG(msm_port->ipc_log_misc, uport->dev, "%s: %d\n", __func__, true);
 	msm_port->port_state = UART_PORT_SHUTDOWN_IN_PROGRESS;
 
@@ -4653,6 +4695,13 @@ exit_startup:
 		msm_geni_serial_power_off(&msm_port->uport);
 	UART_LOG_DBG(msm_port->ipc_log_misc, uport->dev, "%s: ret:%d\n", __func__, ret);
 
+#ifdef CONFIG_OPLUS_POGOPIN_FUNCTION
+	if(pogo_keyboard_ops.check && pogo_keyboard_ops.init){
+		if(pogo_keyboard_ops.check(uport)) {
+			pogo_keyboard_ops.init(uport,1);
+		}
+	}
+#endif /* CONFIG_OPLUS_POGOPIN_FUNCTION */
 	return ret;
 }
 

@@ -150,6 +150,7 @@ def define_gen3auto():
         "drivers/usb/gadget/function/f_fs_ipc_log.ko",
         "drivers/usb/gadget/function/usb_f_cdev.ko",
         "drivers/usb/gadget/function/usb_f_qdss.ko",
+        "drivers/usb/gadget/function/f_rndis.ko",
         "drivers/usb/phy/phy-generic.ko",
         "drivers/usb/phy/phy-msm-snps-hs.ko",
         "drivers/usb/phy/phy-msm-ssusb-qmp.ko",

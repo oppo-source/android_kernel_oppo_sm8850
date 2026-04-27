@@ -17,18 +17,18 @@ def define_canoe():
         kernel_vendor_cmdline_extras = ["bootconfig"]
 
         if variant == "consolidate":
-            board_bootconfig_extras += ["androidboot.serialconsole=1"]
+            board_bootconfig_extras += ["androidboot.serialconsole=0"]
             board_kernel_cmdline_extras += [
                 # do not sort
-                "console=ttyMSM0,115200n8",
-                "qcom_geni_serial.con_enabled=1",
+                "console=ttynull",
+                "qcom_geni_serial.con_enabled=0",
                 "earlycon",
                 "ufshcd_core.uic_cmd_timeout=2000",
             ]
             kernel_vendor_cmdline_extras += [
                 # do not sort
-                "console=ttyMSM0,115200n8",
-                "qcom_geni_serial.con_enabled=1",
+                "console=ttynull",
+                "qcom_geni_serial.con_enabled=0",
                 "earlycon",
             ]
 
