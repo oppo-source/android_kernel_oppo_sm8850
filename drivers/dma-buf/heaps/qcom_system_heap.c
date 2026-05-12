@@ -61,6 +61,18 @@
 #include "qcom_system_movable_heap.h"
 #include "mm/internal.h"
 
+//add  for dma debug
+#define CREATE_TRACE_POINTS
+#include "qcom_dma_trace.h"
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+#include "mm_osvelte/mm-trace.h"
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
+
+#ifdef CONFIG_OPLUS_FEATURE_MM_BOOSTPOOL
+#include "mm_boost_pool/oplus_boost_pool.h"
+#endif
+
 #if IS_ENABLED(CONFIG_QCOM_DMABUF_HEAPS_PAGE_POOL_REFILL)
 #define DYNAMIC_POOL_FILL_MARK (100 * SZ_1M)
 #define DYNAMIC_POOL_LOW_MARK_PERCENT 40UL
@@ -68,6 +80,11 @@
 
 #define DYNAMIC_POOL_REFILL_DEFER_WINDOW_MS 10
 #define DYNAMIC_POOL_KTHREAD_NICE_VAL 10
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+atomic64_t qcom_system_heap_total = ATOMIC64_INIT(0);
+EXPORT_SYMBOL(qcom_system_heap_total);
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 
 static int get_dynamic_pool_fillmark(struct dynamic_page_pool *pool)
 {
@@ -382,6 +399,11 @@ static void system_heap_deferred_free(struct deferred_freelist_item *item,
 				if (compound_order(page) == orders[j])
 					break;
 			}
+#ifdef CONFIG_OPLUS_FEATURE_MM_BOOSTPOOL
+			if (0 == dynamic_boost_pool_free(sys_heap->boost_pool, page, j))
+				continue;
+			else
+#endif
 			dynamic_page_pool_free(sys_heap->pool_list[j], page);
 		}
 	}
@@ -394,6 +416,13 @@ void qcom_system_heap_free(struct qcom_sg_buffer *buffer)
 	deferred_free(&buffer->deferred_free, system_heap_deferred_free,
 			PAGE_ALIGN(buffer->len) / PAGE_SIZE);
 }
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+inline bool is_system_heap_deferred_free(void (*free)(struct qcom_sg_buffer *buffer))
+{
+	return free == qcom_system_heap_free;
+}
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 
 struct page *qcom_sys_heap_alloc_largest_available(struct dynamic_page_pool **pools,
 						   unsigned long size,
@@ -436,7 +465,11 @@ struct page *qcom_sys_heap_alloc_largest_available(struct dynamic_page_pool **po
 int system_qcom_sg_buffer_alloc(struct dma_heap *heap,
 				struct qcom_sg_buffer *buffer,
 				unsigned long len,
-				bool movable)
+				bool movable
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+				,struct aizerofs_dma_buf_cache *dbuf_cache
+#endif
+				)
 {
 	struct qcom_system_heap *sys_heap;
 	unsigned long size_remaining = len;
@@ -446,6 +479,10 @@ int system_qcom_sg_buffer_alloc(struct dma_heap *heap,
 	struct list_head pages;
 	struct page *page, *tmp_page;
 	int i, ret = -ENOMEM;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+	bool cached = false;
+	u64 page_idx = 0;
+#endif
 
 	sys_heap = dma_heap_get_drvdata(heap);
 
@@ -457,6 +494,13 @@ int system_qcom_sg_buffer_alloc(struct dma_heap *heap,
 
 	INIT_LIST_HEAD(&pages);
 	i = 0;
+#ifdef CONFIG_OPLUS_FEATURE_MM_BOOSTPOOL
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+	dynamic_boost_pool_alloc_pack(sys_heap->boost_pool, &size_remaining, &max_order, &pages, &i,dbuf_cache, &page_idx);
+#else
+	dynamic_boost_pool_alloc_pack(sys_heap->boost_pool, &size_remaining, &max_order, &pages, &i);
+#endif
+#endif
 	while (size_remaining > 0) {
 		/*
 		 * Avoid trying to allocate memory if the process
@@ -465,15 +509,32 @@ int system_qcom_sg_buffer_alloc(struct dma_heap *heap,
 		if (fatal_signal_pending(current))
 			goto free_mem;
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+		cached = false;
+		page = get_page_from_dbuf_cache(dbuf_cache, page_idx);
+		if (page) {
+			cached = true;
+			goto add_page;
+		}
+#endif
 		page = qcom_sys_heap_alloc_largest_available(sys_heap->pool_list,
 							     size_remaining,
 							     max_order,
 							     movable);
 		if (!page)
 			goto free_mem;
-
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+add_page:
+#endif
 		list_add_tail(&page->lru, &pages);
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+		dbuf_cache_add_pages(dbuf_cache, page, page_idx);
+		page_idx += compound_nr(page);
+#endif
 		size_remaining -= page_size(page);
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+		if (!cached)
+#endif
 		max_order = compound_order(page);
 		i++;
 	}
@@ -522,12 +583,34 @@ static struct dma_buf *system_heap_allocate(struct dma_heap *heap,
 	DEFINE_DMA_BUF_EXPORT_INFO(exp_info);
 	struct dma_buf *dmabuf;
 	int ret;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+	struct aizerofs_dma_buf_cache *dbuf_cache = NULL;
+	dbuf_cache = find_or_create_dbuf_cache(&len);
+	if (IS_ERR(dbuf_cache))
+		return ERR_PTR(-ENOMEM);
+#endif
 
 	buffer = kzalloc(sizeof(*buffer), GFP_KERNEL);
-	if (!buffer)
+	if (!buffer) {
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+		dbuf_cache_terminate_io_worker(dbuf_cache);
+#endif
 		return ERR_PTR(-ENOMEM);
+	}
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+	mm_trace_fmt_begin("odma-buf: alloc: %s,%lu,%lu",
+			   dma_heap_get_name(heap),
+			   atomic64_read(&qcom_system_heap_total), len);
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+	ret = system_qcom_sg_buffer_alloc(heap, buffer, len, false, dbuf_cache);
+#else
 	ret = system_qcom_sg_buffer_alloc(heap, buffer, len, false);
+#endif
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+	mm_trace_fmt_end();
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 	if (ret)
 		goto free_buf_struct;
 
@@ -548,15 +631,34 @@ static struct dma_buf *system_heap_allocate(struct dma_heap *heap,
 		ret = PTR_ERR(dmabuf);
 		goto free_vmperm;
 	}
-
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+	dbuf_cache_init_dbuf(dbuf_cache, dmabuf);
+#endif
+	//add  for dma debug
+	/*
+	* use android_kabi_reserved2 as inode no. but it has potential risk if
+	* google uses it.
+	*/
+	dmabuf->__kabi_reserved2 = file_inode(dmabuf->file)->i_ino;
+	trace_qcom_dma_alloc(len, dmabuf->__kabi_reserved2,
+					exp_info.exp_name ?: "NULL");
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_MM_OSVELTE)
+	atomic64_add(dmabuf->size, &qcom_system_heap_total);
+#endif /* CONFIG_OPLUS_FEATURE_MM_OSVELTE */
 	return dmabuf;
 
 free_vmperm:
 	mem_buf_vmperm_free(buffer->vmperm);
 free_sys_heap_mem:
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+        dbuf_cache_terminate_io_worker(dbuf_cache);
+#endif
 	qcom_system_heap_free(buffer);
 	return ERR_PTR(ret);
 free_buf_struct:
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_AIZEROCOPY)
+	dbuf_cache_terminate_io_worker(dbuf_cache);
+#endif
 	kfree(buffer);
 
 	return ERR_PTR(ret);
@@ -612,6 +714,9 @@ void qcom_system_heap_create(const char *name, const char *system_alias, bool un
 	if (ret)
 		goto free_pools;
 
+#ifdef CONFIG_OPLUS_FEATURE_MM_BOOSTPOOL
+	sys_heap->boost_pool = dynamic_boost_pool_create_pack();
+#endif
 	heap = dma_heap_add(&exp_info);
 	if (IS_ERR(heap)) {
 		ret = PTR_ERR(heap);
@@ -620,7 +725,7 @@ void qcom_system_heap_create(const char *name, const char *system_alias, bool un
 
 	if (uncached)
 		dma_coerce_mask_and_coherent(dma_heap_get_dev(heap),
-					     DMA_BIT_MASK(64));
+				             DMA_BIT_MASK(64));
 
 	pr_info("%s: DMA-BUF Heap: Created '%s'\n", __func__, name);
 

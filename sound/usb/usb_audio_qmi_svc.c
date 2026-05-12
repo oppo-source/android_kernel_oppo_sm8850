@@ -104,6 +104,7 @@ struct uaudio_dev {
 	int num_intf;
 	struct intf_info *info;
 	struct snd_usb_audio *chip;
+	bool disconnect_wq_init;
 };
 
 static struct uaudio_dev uadev[SNDRV_CARDS];
@@ -491,6 +492,8 @@ static void *find_csint_desc(unsigned char *descstart, int desclen, u8 dsubtype)
 	return NULL;
 }
 
+static int initialize_uadev_if_in_use(int card_num,
+	struct snd_usb_substream *subs, struct snd_usb_audio *chip);
 /**
  * uaudio_populate_uac_desc() - parse UAC parameters and populate QMI resp
  * @subs: usb substream
@@ -857,18 +860,9 @@ skip_sync:
 	chip = uadev[card_num].chip;
 
 	if (atomic_read(&uadev[card_num].in_use) == 1) {
-		init_waitqueue_head(&uadev[card_num].disconnect_wq);
-		uadev[card_num].num_intf =
-			subs->dev->config->desc.bNumInterfaces;
-		uadev[card_num].info = kcalloc(uadev[card_num].num_intf,
-			sizeof(struct intf_info), GFP_KERNEL);
-		if (!uadev[card_num].info) {
-			ret = -ENOMEM;
+		ret = initialize_uadev_if_in_use(card_num, subs, chip);
+		if (ret < 0)
 			goto unmap_sync;
-		}
-		mutex_lock(&chip->mutex);
-		uadev[card_num].udev = subs->dev;
-		mutex_unlock(&chip->mutex);
 	}
 
 	uadev[card_num].card_num = card_num;
@@ -919,6 +913,29 @@ err:
 	return ret;
 }
 
+static int initialize_uadev_if_in_use(int card_num,
+	struct snd_usb_substream *subs, struct snd_usb_audio *chip)
+{
+	uaudio_dbg("Device in use: card_num=%d, num_intf=%d",
+		card_num, subs->dev->config->desc.bNumInterfaces);
+
+	if (!uadev[card_num].disconnect_wq_init) {
+		init_waitqueue_head(&uadev[card_num].disconnect_wq);
+		uadev[card_num].disconnect_wq_init = true;
+	}
+
+	uadev[card_num].num_intf = subs->dev->config->desc.bNumInterfaces;
+	uadev[card_num].info = kcalloc(uadev[card_num].num_intf,
+		sizeof(struct intf_info), GFP_KERNEL);
+	if (!uadev[card_num].info)
+		return -ENOMEM;
+
+	mutex_lock(&chip->mutex);
+	uadev[card_num].udev = subs->dev;
+	mutex_unlock(&chip->mutex);
+	return 0;
+}
+
 static void uaudio_dev_intf_cleanup(struct usb_device *udev,
 	struct intf_info *info)
 {
@@ -949,6 +966,9 @@ static void uaudio_dev_intf_cleanup(struct usb_device *udev,
 	info->xfer_buf_pa = 0;
 
 	info->in_use = false;
+
+	uaudio_dbg("release resources: intf# %d card# %d\n",
+			info->intf_num, info->pcm_card_num);
 }
 
 static void uaudio_event_ring_cleanup_free(struct uaudio_dev *dev)
@@ -977,8 +997,6 @@ static void uaudio_dev_cleanup(struct uaudio_dev *dev)
 		if (!dev->info[if_idx].in_use)
 			continue;
 		uaudio_dev_intf_cleanup(dev->udev, &dev->info[if_idx]);
-		uaudio_dbg("release resources: intf# %d card# %d\n",
-				dev->info[if_idx].intf_num, dev->card_num);
 	}
 
 	dev->num_intf = 0;
@@ -1010,6 +1028,10 @@ static void uaudio_connect(struct snd_usb_audio *chip)
 
 	uadev[chip->card->number].chip = chip;
 	uadev[chip->card->number].sb = sb;
+#ifdef OPLUS_FEATURE_CHG_BASIC
+	uaudio_info("WA for hang headset!");
+	uadev[chip->card->number].chip->quirk_flags |= QUIRK_FLAG_CTL_MSG_DELAY_5M;
+#endif
 }
 
 /*
@@ -1439,7 +1461,6 @@ static int check_valid_request(struct qmi_uaudio_stream_req_msg_v01 *req_msg,
 
 	if (!subs) {
 		uaudio_err("invalid substream\n");
-		return -EFAULT;
 	}
 
 	chip = uadev[pcm_card_num].chip;
@@ -1588,11 +1609,13 @@ response:
 		mutex_lock(&chip->mutex);
 		if (info_idx >= 0) {
 			info = &uadev[pcm_card_num].info[info_idx];
-			uaudio_dev_intf_cleanup(
-					uadev[pcm_card_num].udev,
-					info);
-			uaudio_dbg("release resources: intf# %d card# %d\n",
-					info->intf_num, pcm_card_num);
+			if (info) {
+				uaudio_dev_intf_cleanup(
+						uadev[pcm_card_num].udev,
+						info);
+				uaudio_dbg("release resources: intf# %d card# %d\n",
+						info->intf_num, pcm_card_num);
+			}
 		}
 		if (atomic_dec_and_test(&uadev[pcm_card_num].in_use))
 			uaudio_dev_release(&uadev[pcm_card_num]);

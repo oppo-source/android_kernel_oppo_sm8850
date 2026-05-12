@@ -278,6 +278,11 @@ static void walt_do_sched_yield_before(void *unused, long *skip)
 {
 	struct walt_task_struct *wts = (struct walt_task_struct *)android_task_vendor_data(current);
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_PIPELINE)
+	if (sysctl_yielder_disable)
+		return;
+#endif
+
 	if (unlikely(walt_disabled))
 		return;
 

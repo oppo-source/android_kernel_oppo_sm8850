@@ -21,6 +21,9 @@
 
 #include "zcomp.h"
 
+/* force disable ZRAM_WRITEBACK, otherwise GKI defconfig will impact */
+#undef CONFIG_ZRAM_WRITEBACK
+
 #define SECTORS_PER_PAGE_SHIFT	(PAGE_SHIFT - SECTOR_SHIFT)
 #define SECTORS_PER_PAGE	(1 << SECTORS_PER_PAGE_SHIFT)
 #define ZRAM_LOGICAL_BLOCK_SHIFT 12
@@ -54,7 +57,12 @@ enum zram_pageflags {
 
 	ZRAM_COMP_PRIORITY_BIT1, /* First bit of comp priority index */
 	ZRAM_COMP_PRIORITY_BIT2, /* Second bit of comp priority index */
-
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	ZRAM_BATCHING_OUT,
+	ZRAM_FROM_HYBRIDSWAP,
+	ZRAM_MCGID_CLEAR,
+	ZRAM_IN_BD, /* zram stored in back device */
+#endif
 	__NR_ZRAM_PAGEFLAGS,
 };
 
@@ -127,7 +135,7 @@ struct zram {
 	 */
 	bool claim; /* Protected by disk->open_mutex */
 	bool qpace;
-#ifdef CONFIG_ZRAM_WRITEBACK
+#if (defined CONFIG_ZRAM_WRITEBACK) || (defined CONFIG_HYBRIDSWAP_CORE)
 	struct file *backing_dev;
 	spinlock_t wb_limit_lock;
 	bool wb_limit_enable;
@@ -139,5 +147,9 @@ struct zram {
 #ifdef CONFIG_ZRAM_MEMORY_TRACKING
 	struct dentry *debugfs_dir;
 #endif
+#ifdef CONFIG_HYBRIDSWAP_CORE
+	struct hybridswap *hs_swap;
+	unsigned long increase_nr_pages;
+#endif /* CONFIG_HYBRIDSWAP_CORE */
 };
 #endif

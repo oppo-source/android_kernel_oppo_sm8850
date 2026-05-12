@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
-
 /*
  * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/init.h>
@@ -16,29 +16,59 @@
 #endif
 
 static int cpu_phys_log_map_client_inited = -EPROBE_DEFER;
-static uint32_t physical_cpus[NR_CPUS];
+static int physical_cpus[NR_CPUS];
+static int logical_cpus[NR_CPUS];
 
+/*
+ * calling site needs to handle error condition
+ * return >=0 for valid cpu, -1 for error
+ */
 int cpu_logical_to_phys(int cpu)
 {
-	if (likely(cpu_phys_log_map_client_inited > 0))
+	if (cpu >= NR_CPUS)
+		return -EINVAL;
+
+	if (likely(cpu_phys_log_map_client_inited > 0) && likely(physical_cpus[cpu] >= 0))
 		return physical_cpus[cpu];
 
-	pr_warn("cpu_phys_log_map has not been inited yet.\n");
-	return cpu_phys_log_map_client_inited;
+	pr_warn("cpu_phys_log_map invalid inited=%d map=%d\n", cpu_phys_log_map_client_inited,
+			physical_cpus[cpu]);
+	return -EINVAL;
 }
 EXPORT_SYMBOL_GPL(cpu_logical_to_phys);
+
+/*
+ * calling site needs to handle error condition
+ * return >=0 for valid cpu, -1 for error
+ */
+int cpu_phys_to_logical(int cpu)
+{
+	if (cpu >= NR_CPUS)
+		return -EINVAL;
+
+	if (likely(cpu_phys_log_map_client_inited > 0) && likely(logical_cpus[cpu] >= 0))
+		return logical_cpus[cpu];
+
+	pr_warn("cpu_phys_log_map invalid inited=%d map=%d\n", cpu_phys_log_map_client_inited,
+			logical_cpus[cpu]);
+	return -EINVAL;
+}
+EXPORT_SYMBOL_GPL(cpu_phys_to_logical);
 
 static void get_phy_cpu_logic(int clusters_len, u32 *cummulative_cluster_cpus)
 {
 	int i, cpu, cluster_index, got_cpu;
 
-	for (i = 0; i < NR_CPUS; i++)
+	for (i = 0; i < NR_CPUS; i++) {
 		physical_cpus[i] = -1;
+		logical_cpus[i] = -1;
+	}
 
 	for_each_possible_cpu(cpu) {
 		cluster_index = topology_cluster_id(cpu);
 		got_cpu = cummulative_cluster_cpus[cluster_index] + topology_core_id(cpu);
 		physical_cpus[cpu] = got_cpu;
+		logical_cpus[got_cpu] = cpu;
 	}
 }
 

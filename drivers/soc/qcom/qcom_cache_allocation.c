@@ -631,6 +631,9 @@ static ssize_t enable_monitor_store(struct device *dev,
 	if (kstrtobool(buf, &val))
 		return -EINVAL;
 
+	if (pd->enable_monitor == val)
+		return count;
+
 	mutex_lock(&pd->lock);
 	pd->enable_monitor = val;
 	pd->running_flag = val;
@@ -647,10 +650,8 @@ static ssize_t enable_monitor_store(struct device *dev,
 		pd->client_input[GPU] = pd->client_input_ext[GPU];
 		ret = cache_allocation_configure(pd);
 		mutex_unlock(&pd->lock);
-		if (ret < 0) {
+		if (ret < 0)
 			WARN_ON(1);
-			return count;
-		}
 
 		cancel_delayed_work_sync(&pd->work);
 	}
