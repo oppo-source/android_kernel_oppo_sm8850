@@ -312,7 +312,6 @@ static int exit_dwc3_host_exit(struct kretprobe_instance *ri,
 	return 0;
 }
 
-
 #define ENTRY_EXIT(name) {\
 	.handler = exit_##name,\
 	.entry_handler = entry_##name,\

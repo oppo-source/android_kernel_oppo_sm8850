@@ -1,9 +1,11 @@
 load(":drivers/leds/flash/modules.bzl", register_flash = "register_modules")
 load(":drivers/leds/rgb/modules.bzl", register_rgb = "register_modules")
+load(":drivers/leds/aw210xx/modules.bzl", register_aw210xx= "register_modules")
 
 def register_modules(registry):
     register_flash(registry)
     register_rgb(registry)
+    register_aw210xx(registry)
 
     registry.register(
         name = "drivers/leds/leds-qti-flash",
@@ -15,7 +17,7 @@ def register_modules(registry):
         ],
         deps = [
             # do not sort
-            "drivers/power/supply/qti_battery_charger",
+            "//vendor/oplus/kernel/charger/bazel:{target_variant}_oplus_chg_v2",
             "drivers/soc/qcom/panel_event_notifier",
             "drivers/soc/qcom/qti_pmic_glink",
             "drivers/soc/qcom/pdr_interface",

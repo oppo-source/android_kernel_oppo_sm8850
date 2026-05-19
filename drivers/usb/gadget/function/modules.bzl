@@ -140,3 +140,17 @@ def register_modules(registry):
             "arch/arm64/gunyah/gh_arm_drv",
         ],
     )
+
+    registry.register(
+        name = "drivers/usb/gadget/function/f_rndis",
+        out = "f_rndis.ko",
+        config = "CONFIG_USB_F_RNDIS",
+        srcs = [
+        # do not sort
+        "drivers/usb/gadget/function/f_rndis.c",
+        "drivers/usb/gadget/function/ndis.h",
+        "drivers/usb/gadget/function/rndis.c",
+        "drivers/usb/gadget/function/rndis.h",
+        "drivers/usb/gadget/function/u_rndis.h",
+        ],
+    )

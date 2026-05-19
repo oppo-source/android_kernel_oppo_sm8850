@@ -25,6 +25,9 @@
 #include <linux/sched/walt.h>
 #include <soc/qcom/dcvs.h>
 #include <trace/hooks/sched.h>
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+#include <linux/bwmon_geas.h>
+#endif
 #include "bwmon.h"
 #include "trace-dcvs.h"
 
@@ -480,6 +483,9 @@ static unsigned int mbps_to_bytes(unsigned long mbps, unsigned int ms)
 static int __bw_hwmon_sw_sample_end(struct bw_hwmon *hwmon)
 {
 	struct hwmon_node *node = hwmon->node;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+	struct hwmon_node_ext *node_ext = &node->geas_frame_bw;
+#endif
 	ktime_t ts;
 	unsigned long bytes, mbps;
 	unsigned int us;
@@ -511,6 +517,10 @@ static int __bw_hwmon_sw_sample_end(struct bw_hwmon *hwmon)
 			wake = DOWN_WAKE;
 	}
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+	node_ext->wake = wake;
+	node_ext->irq_raw_mbps = mbps;
+#endif
 	node->prev_ts = ts;
 	node->wake = wake;
 	node->sampled = true;
@@ -916,6 +926,18 @@ static bool should_trigger_low_power_update(struct hwmon_node *node)
 	return ret;
 }
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+void init_geas_with_bwmon(struct list_head **list, spinlock_t **lock, spinlock_t **irq_lock, struct workqueue_struct **wq)
+{
+	*list = &hwmon_list;
+	*lock = &list_lock;
+	*irq_lock = &sample_irq_lock;
+	if (wq != NULL)
+		*wq = bwmon_wq;
+}
+EXPORT_SYMBOL(init_geas_with_bwmon);
+#endif
+
 static const u64 HALF_TICK_NS = (NSEC_PER_SEC / HZ) >> 1;
 static void bwmon_jiffies_update_cb(void *unused, void *extra)
 {
@@ -932,6 +954,10 @@ static void bwmon_jiffies_update_cb(void *unused, void *extra)
 		hw = node->hw;
 		if (!hw->is_active)
 			continue;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+		if (node->geas_frame_bw.frame_drive || node->geas_frame_bw.timer_drive)
+			continue;
+#endif
 		if (node->use_sched_boost) {
 			if (new_boost_state == -1)
 				new_boost_state = should_boost_bus_dcvs();
@@ -988,6 +1014,9 @@ static inline void bwmon_monitor_stop(struct bw_hwmon *hw)
 static int update_bw_hwmon(struct bw_hwmon *hw)
 {
 	struct hwmon_node *node = hw->node;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+	struct hwmon_node_ext *node_ext = &node->geas_frame_bw;
+#endif
 	int ret = 0;
 
 	mutex_lock(&node->mon_lock);
@@ -1000,6 +1029,15 @@ static int update_bw_hwmon(struct bw_hwmon *hw)
 
 	/* governor update and commit */
 	mutex_lock(&node->update_lock);
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+	if (node_ext->bwmon_irq_handler != NULL && node_ext->bwmon_irq_handler(node)) {
+	        mutex_unlock(&node->update_lock);
+	        bwmon_monitor_start(hw);
+	        mutex_unlock(&node->mon_lock);
+
+		return 0;
+	}
+#endif
 	if (bwmon_update_cur_freq(node))
 		ret = qcom_dcvs_update_votes(dev_name(hw->dev),
 					node->cur_freqs,
@@ -1081,6 +1119,9 @@ static int configure_hwmon_node(struct bw_hwmon *hwmon)
 	node->max_freq_max_mbps = U32_MAX;
 	node->mbps_zones[0] = 0;
 	node->hw = hwmon;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+	node->geas_frame_bw.node = node;
+#endif
 
 	mutex_init(&node->mon_lock);
 	mutex_init(&node->update_lock);
@@ -1765,6 +1806,12 @@ static irqreturn_t bwmon_intr_handler3(int irq, void *dev)
 static irqreturn_t bwmon_intr_thread(int irq, void *dev)
 {
 	struct bwmon *m = dev;
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS_FDRIVE)
+	struct hwmon_node *node = (&m->hw)->node;
+	struct hwmon_node_ext *node_ext = &node->geas_frame_bw;
+	if ((node_ext->frame_drive || node_ext->timer_drive) && !node_ext->enable_irq)
+		return IRQ_HANDLED;
+#endif
 
 	update_bw_hwmon(&m->hw);
 	return IRQ_HANDLED;

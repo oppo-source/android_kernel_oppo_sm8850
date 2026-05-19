@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2023, Qualcomm Innovation Center, Inc. All rights reserved.
+ * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
  */
 
 #include <linux/types.h>
@@ -9,9 +10,14 @@
 #define _CPU_PHYS_LOG_MAP_H
 
 #if IS_ENABLED(CONFIG_QCOM_CPU_PHYS_LOG_MAP)
-int cpu_logical_to_phys(int cpu);
+extern int cpu_logical_to_phys(int cpu);
+extern int cpu_phys_to_logical(int cpu);
 #else
 static inline int cpu_logical_to_phys(int cpu)
+{
+	return cpu;
+}
+static inline int cpu_phys_to_logical(int cpu)
 {
 	return cpu;
 }

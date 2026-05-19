@@ -43,6 +43,11 @@ unsigned int cstats_util_pct[MAX_CLUSTERS];
 
 u8 smart_freq_legacy_reason_hyst_ms[LEGACY_SMART_FREQ][WALT_NR_CPUS];
 
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS)
+int (*game_lpm_disable_cpu)(int cpu, u64 *timeout) = NULL;
+EXPORT_SYMBOL_GPL(game_lpm_disable_cpu);
+#endif
+
 /**
  * sched_get_cluster_util_pct
  * @return: provide the percentage of this cluter that was used in the
@@ -383,6 +388,13 @@ int sched_lpm_disallowed_time(int cpu, u64 *timeout)
 		*timeout = bias_end_time - now;
 		return 0; /* shallowest c-state */
 	}
+
+#if IS_ENABLED(CONFIG_OPLUS_FEATURE_GEAS)
+	if (game_lpm_disable_cpu) {
+		if (game_lpm_disable_cpu(cpu, timeout))
+			return 0;
+	}
+#endif
 
 	return INT_MAX; /* don't care */
 }

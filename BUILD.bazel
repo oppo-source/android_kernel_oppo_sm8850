@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0
 
-load("//build:msm_kernel_extensions.bzl", "define_top_level_rules")
+load(":kleaf-scripts/msm_kernel_extensions.bzl", "define_top_level_rules")
 load("//build/kernel/kleaf:hermetic_tools.bzl", "hermetic_genrule")
 load("//build/kernel/kleaf:kernel.bzl", "ddk_headers", "ddk_uapi_headers")
 load(":common_sources.bzl", "define_common_upstream_files")
@@ -30,6 +30,10 @@ load(
 load(":kleaf-scripts/targets/sun_vms.bzl", "define_sun_vms")
 load(":kleaf-scripts/targets/vienna.bzl", "define_vienna")
 load(":kleaf-scripts/targets/vienna_le.bzl", "define_vienna_le")
+load("//build/kernel/oplus:oplus_kunit_modules.bzl", "define_oplus_kunit_ddk_modules")
+define_oplus_kunit_ddk_modules(
+    name = "oplus_kunit_tests",
+)
 
 exports_files(["android/abi_gki_aarch64_qcom"])
 
@@ -175,6 +179,8 @@ filegroup(
     name = "unsafe_headers_qcom_group",
     srcs = [
         "//common:drivers/android/binder_alloc.h",
+	"//common:kernel/irq/internals.h",
+	"//common:kernel/irq/settings.h",
         "//common:drivers/android/binder_internal.h",
         "//common:drivers/android/binder_trace.h",
         "//common:drivers/android/dbitmap.h",
@@ -222,8 +228,11 @@ filegroup(
         "//common:drivers/usb/dwc3/gadget.h",
         "//common:drivers/usb/dwc3/io.h",
         "//common:drivers/usb/dwc3/trace.h",
+        "//common:drivers/usb/gadget/configfs.h",
         "//common:drivers/usb/gadget/function/u_ether.h",
+        "//common:drivers/usb/gadget/function/u_ether_configfs.h",
         "//common:drivers/usb/gadget/function/u_fs.h",
+        "//common:drivers/usb/gadget/function/u_rndis.h",
         "//common:drivers/usb/host/pci-quirks.h",
         "//common:drivers/usb/host/xhci.h",
         "//common:drivers/usb/host/xhci-caps.h",
@@ -232,6 +241,7 @@ filegroup(
         "//common:drivers/usb/typec/ucsi/ucsi.h",
         "//common:drivers/virt/gunyah/rsc_mgr.h",
         "//common:fs/proc/internal.h",
+        "//common:kernel/futex/futex.h",
         "//common:kernel/locking/mutex.h",
         "//common:kernel/power/power.h",
         "//common:kernel/printk/printk_ringbuffer.h",

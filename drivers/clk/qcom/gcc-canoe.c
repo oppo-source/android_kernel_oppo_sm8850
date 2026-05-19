@@ -4041,6 +4041,13 @@ static int gcc_canoe_probe(struct platform_device *pdev)
 	regmap_update_bits(regmap, gcc_ufs_phy_ice_core_clk.halt_reg,
 			   BIT(14), BIT(14));
 
+	/* FORCE_MEM_CORE_ON for gcc_pcie_0_pipe_clk clock */
+	regmap_update_bits(regmap, gcc_pcie_0_pipe_clk.halt_reg,
+			   BIT(14), BIT(14));
+	/* FORCE_MEM_PERIPH_ON for gcc_pcie_0_pipe_clk clock */
+	regmap_update_bits(regmap, gcc_pcie_0_pipe_clk.halt_reg,
+			   BIT(13), BIT(13));
+
 	ret = qcom_cc_really_probe(&pdev->dev, &gcc_canoe_desc, regmap);
 	if (ret)
 		return dev_err_probe(&pdev->dev, ret, "Failed to register GCC clocks\n");
